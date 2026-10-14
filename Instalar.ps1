@@ -3,7 +3,8 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $hub  = Join-Path $Root 'ClaudeHub.ps1'
-Get-ChildItem $Root -Recurse -Include *.ps1, *.cmd -ErrorAction SilentlyContinue | Unblock-File   # arquivos baixados do GitHub vem "bloqueados"
+# Arquivos baixados do GitHub vem "bloqueados" pelo Windows: desbloqueia so os scripts desta pasta (nada de varrer profiles\ ou engine\).
+Get-ChildItem $Root -File | Where-Object { $_.Extension -in '.ps1', '.cmd' } | Unblock-File
 
 if (-not (Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue)) {
   Write-Host 'O Claude Desktop nao esta instalado. Instale pela Microsoft Store (ou: winget install Anthropic.Claude) e rode este instalador de novo.' -ForegroundColor Yellow

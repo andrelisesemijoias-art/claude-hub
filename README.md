@@ -24,11 +24,14 @@ Na primeira abertura o Hub copia o Claude instalado para a pasta `engine` (cerca
 | **Nova conta** | cria um perfil vazio e um atalho no desktop (`Claude - Nome`) |
 | **Atalho** | recria o atalho de uma conta |
 | **Remover** | tira a conta da lista. A pasta do perfil (login e histórico) **não** é apagada |
-| **Atualizar motor** | copia o Claude instalado para o Hub (com todas as contas fechadas) |
+| **Atualizar motor** | copia o Claude instalado para o Hub (com todas as contas fechadas). Se já está na mesma versão, não copia nada |
 | **Baixar atualização** | pede ao `winget` o Claude mais novo e depois atualiza o motor. *Pode fechar o seu Claude principal* |
 | **Importar do app antigo** | opcional: traz as contas do app "Multi Instance for Claude Desktop" |
 
-Pela linha de comando: `ClaudeHub.ps1 -Listar`, `-Nova "Nome"`, `-Abrir "Nome"` (ou `-Todas`), `-Fechar "Nome"`, `-Atualizar [-Baixar]`, `-Atalho "Nome"`, `-Remover "Nome"`.
+Pela linha de comando: `ClaudeHub.ps1 -Listar`, `-Nova "Nome"`, `-Abrir "Nome"` (ou `-Todas`), `-Fechar "Nome"`, `-Atualizar [-Baixar] [-Forcar]`, `-Atalho "Nome"`, `-Remover "Nome"`.
+`-Forcar` recopia o motor mesmo na mesma versão (conserto, se o motor ficou estranho).
+
+O painel acompanha sozinho o estado das contas (a cada ~6 s, em segundo plano — a tela não trava) e, mesmo que você abra ou feche contas por atalho ou comando, a lista se corrige sozinha.
 
 ## Atualizações
 - A **Microsoft Store** atualiza o Claude instalado (se a atualização automática estiver ligada).
@@ -42,6 +45,18 @@ O Claude Desktop é um app Electron e cada pasta de dados (`--user-data-dir`) é
 - `profiles/`, `engine/` e `contas.json` estão no `.gitignore`: **nunca** devem ser enviados ao Git. Cada perfil contém a sessão da conta (cookies e tokens).
 - Se for compartilhar a pasta, **apague `profiles\` e `contas.json` antes**.
 - Use só com contas **suas**. Este projeto não altera o Claude nem contorna limites; ele apenas abre instâncias separadas do app oficial.
+
+## Garantias (testadas)
+- Contas com nomes parecidos (`T1` e `T10`) não se confundem: o Hub compara a pasta do perfil por inteiro.
+- Duas contas abertas ao mesmo tempo por atalhos diferentes não se atropelam na hora de copiar o motor (uma atualização por vez).
+- Se a cópia do motor for interrompida (queda de energia, janela fechada), a próxima abertura refaz a cópia sozinha.
+- Um `contas.json` corrompido não é sobrescrito: o Hub guarda uma cópia (`contas.json.corrompido-…`) e explica o erro.
+- Com o motor em uso, a atualização é recusada com o nome da conta a fechar — nunca copia por cima de arquivos em uso.
+
+## Limitações
+- Só Claude Desktop instalado pela **Microsoft Store** (é de onde o Hub copia o motor).
+- As janelas das contas podem ficar agrupadas num único ícone da barra de tarefas.
+- Fechar uma conta pelo Hub fecha também o que ela deixou rodando (por exemplo sessões do Claude Code daquele perfil).
 
 ## Problemas comuns
 - **A janela abre e fecha na hora** → o motor está desatualizado ou foi criado de uma pasta protegida. Feche todas as contas e use **Atualizar motor**.
