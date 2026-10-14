@@ -1,0 +1,12 @@
+# NUNCA versionar: contas, logins e o motor copiado do Claude.
+# Cada pasta de perfil guarda a sessao (cookies/tokens) de uma conta do Claude.
+profiles/
+engine/
+contas.json
+contas.json.bak
+
+# crash dumps, logs e atalhos gerados
+*.dmp
+*.log
+*.lnk
+Crashpad/
