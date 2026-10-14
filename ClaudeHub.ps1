@@ -19,7 +19,8 @@
 param(
   [switch]$Gui, [switch]$Listar, [string]$Nova, [string]$Abrir, [switch]$Todas, [string]$Fechar,
   [switch]$Atualizar, [switch]$Baixar, [switch]$Forcar, [switch]$Importar, [string]$Atalho, [string]$Remover,
-  [switch]$SoFuncoes   # uso interno: so define as funcoes (o painel coleta dados em segundo plano com isto)
+  [switch]$SoFuncoes,  # uso interno: so define as funcoes (o painel coleta dados em segundo plano com isto)
+  [switch]$Guardiao    # uso interno: mantem a identidade de cada conta na barra de tarefas enquanto houver contas abertas
 )
 $ErrorActionPreference = 'Stop'
 $Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -174,6 +175,7 @@ function Open-Conta($conta) {
   }
   if (Test-Running $conta) { return 'ja estava aberta' }
   Start-Process -FilePath $EngineExe -ArgumentList "--user-data-dir=`"$($conta.profileDir)`"" | Out-Null
+  Start-Guardiao   # cada conta aberta ganha o proprio icone na barra de tarefas
   return "aberta$aviso"
 }
 function Close-Conta($conta) {
@@ -194,6 +196,93 @@ function New-Atalho($conta) {
   if (Test-Path $EngineExe) { $s.IconLocation = "$EngineExe,0" }
   $s.Description = "Claude - $($conta.nome)"; $s.Save()
   return $lnk
+}
+
+# ------------------------------------------------------------------ barra de tarefas (um icone por conta)
+# O Windows agrupa janelas pelo AppUserModelID. Todas as janelas do Claude trazem o mesmo, entao ficam num icone so.
+# Aqui cada janela de conta recebe o proprio ID (ClaudeHub.<conta>), mais nome e comando de reabertura (para fixar na barra e reabrir pelo Hub).
+$TaskbarSrc = @'
+using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+public static class Taskbar {
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] public struct PROPERTYKEY { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Explicit)] public struct PROPVARIANT { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore { int GetCount(out uint c); int GetAt(uint i, out PROPERTYKEY k); int GetValue(ref PROPERTYKEY k, out PROPVARIANT v); int SetValue(ref PROPERTYKEY k, ref PROPVARIANT v); int Commit(); }
+  [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore ps);
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT v);
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr h);
+  static readonly Guid Fmt = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+  static readonly Guid IID = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+  public static IntPtr[] WindowsOf(uint pid) {
+    var r = new List<IntPtr>();
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h) && GetWindow(h, 4) == IntPtr.Zero && GetWindowTextLength(h) > 0) r.Add(h); return true; }, IntPtr.Zero);
+    return r.ToArray();
+  }
+  static void Set(IPropertyStore ps, uint pid, string value) {
+    var k = new PROPERTYKEY { fmtid = Fmt, pid = pid };
+    var v = new PROPVARIANT { vt = 31, p = Marshal.StringToCoTaskMemUni(value) };   // VT_LPWSTR; PropVariantClear libera a memoria
+    try { ps.SetValue(ref k, ref v); } finally { PropVariantClear(ref v); }
+  }
+  public static string ReadId(IntPtr hwnd) {
+    IPropertyStore ps; var iid = IID;
+    if (SHGetPropertyStoreForWindow(hwnd, ref iid, out ps) != 0 || ps == null) return null;
+    var k = new PROPERTYKEY { fmtid = Fmt, pid = 5 }; PROPVARIANT v;
+    if (ps.GetValue(ref k, out v) != 0) return null;
+    try { return v.vt == 31 && v.p != IntPtr.Zero ? Marshal.PtrToStringUni(v.p) : null; } finally { PropVariantClear(ref v); }
+  }
+  public static bool Stamp(IntPtr hwnd, string id, string relaunchCmd, string name, string icon) {
+    IPropertyStore ps; var iid = IID;
+    if (SHGetPropertyStoreForWindow(hwnd, ref iid, out ps) != 0 || ps == null) return false;
+    Set(ps, 5, id);   // o que agrupa as janelas por conta
+    // Nome/icone/comando de reabertura (para fixar na barra). O comando tem limite de 260 caracteres: se passar, omite so essa parte.
+    try { if (relaunchCmd != null && relaunchCmd.Length < 260) { Set(ps, 2, relaunchCmd); Set(ps, 4, name); Set(ps, 3, icon); } } catch (COMException) { }
+    ps.Commit(); return true;
+  }
+}
+'@
+function Initialize-Taskbar { if (-not ('Taskbar' -as [type])) { Add-Type -TypeDefinition $TaskbarSrc } }
+function Get-IdConta($conta) { return 'ClaudeHub.' + ($conta.nome -replace '[^\p{L}\p{N}]', '') }
+# Carimba as janelas das contas abertas do Hub. Devolve quantas janelas receberam identidade nova.
+function Set-Identidades {
+  Initialize-Taskbar
+  $todos = Get-ClaudeProcs; $n = 0
+  foreach ($c in (Get-Contas)) {
+    $id = Get-IdConta $c
+    $mains = @(Get-Procs $c $todos | Where-Object { $_.CommandLine -notmatch '--type=' -and $_.ExecutablePath -and ($_.ExecutablePath -ieq $EngineExe) })
+    foreach ($m in $mains) {
+      foreach ($h in [Taskbar]::WindowsOf([uint32]$m.ProcessId)) {
+        if ([Taskbar]::ReadId($h) -ne $id) {
+          $cmd = "`"$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Abrir `"$($c.nome)`""
+          if ([Taskbar]::Stamp($h, $id, $cmd, "Claude - $($c.nome)", "$EngineExe,0")) { $n++ }
+        }
+      }
+    }
+  }
+  return $n
+}
+# Guardiao: o Claude pode recriar janelas ou refazer o ID; este processo escondido reaplica a cada 2 s e sai sozinho 30 s depois que a ultima conta fechar.
+function Invoke-Guardiao {
+  $h = [BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($Root.ToLower()))).Replace('-', '').Substring(0, 16)
+  $mx = New-Object System.Threading.Mutex($false, "Local\ClaudeHubGuardiao_$h"); $tem = $false
+  try {
+    try { $tem = $mx.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $tem = $true }
+    if (-not $tem) { return }   # ja existe um guardiao para esta pasta
+    $vazio = 0
+    while ($vazio -lt 30) {
+      try { [void](Set-Identidades) } catch {}
+      $todos = Get-ClaudeProcs
+      if (@(Get-Contas | Where-Object { Test-Running $_ $todos }).Count) { $vazio = 0 } else { $vazio += 2 }
+      Start-Sleep -Seconds 2
+    }
+  } finally { if ($tem) { try { $mx.ReleaseMutex() } catch {} }; $mx.Dispose() }
+}
+function Start-Guardiao {
+  try { Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$PSCommandPath`"", '-Guardiao' | Out-Null } catch {}
 }
 
 # ------------------------------------------------------------------ estado (coletado em segundo plano pelo painel)
@@ -299,6 +388,7 @@ function Show-Painel {
       }
     } elseif (-not $script:longo -and $f.WindowState -ne 'Minimized' -and ((Get-Date) - $script:ultimo).TotalSeconds -ge 6) { & $iniciar }
   })
+  Start-Guardiao
   & $coletarAgora
   $timer.Start()
   [void]$f.ShowDialog()
@@ -308,6 +398,7 @@ function Show-Painel {
 # ------------------------------------------------------------------ entrada
 New-Item -ItemType Directory -Force $Profiles | Out-Null
 try {
+  if ($Guardiao)  { Invoke-Guardiao; return }
   if ($Listar) { $todos = Get-ClaudeProcs; Get-Contas | ForEach-Object { '{0,-20} {1,-8} {2}' -f $_.nome, $(if (Test-Running $_ $todos) { 'aberta' } else { 'fechada' }), $_.profileDir }; "motor: $(Get-MotorVersao) | instalado: $((Get-Instalado).Versao)"; return }
   if ($Nova)      { $c = New-Conta $Nova; [void](New-Atalho $c); "Conta '$($c.nome)' criada. Abra com: -Abrir '$($c.nome)' (faca o login do Claude na janela que abrir)."; return }
   if ($Abrir)     { "$Abrir : " + (Open-Conta (Find-Conta $Abrir)); return }
@@ -320,7 +411,7 @@ try {
   Show-Painel
 } catch {
   Write-Host "ERRO: $($_.Exception.Message)" -ForegroundColor Red
-  if ($Abrir -or $Nova -or -not ($Listar -or $Todas -or $Fechar -or $Remover -or $Atualizar -or $Importar -or $Atalho)) {   # atalho/painel rodam sem janela de console: mostra o erro numa caixa
+  if (-not $Guardiao -and ($Abrir -or $Nova -or -not ($Listar -or $Todas -or $Fechar -or $Remover -or $Atualizar -or $Importar -or $Atalho))) {   # atalho/painel rodam sem janela de console: mostra o erro numa caixa
     try { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Claude Hub', 'OK', 'Warning') | Out-Null } catch {}
   }
   exit 1

@@ -46,17 +46,22 @@ O Claude Desktop é um app Electron e cada pasta de dados (`--user-data-dir`) é
 - Se for compartilhar a pasta, **apague `profiles\` e `contas.json` antes**.
 - Use só com contas **suas**. Este projeto não altera o Claude nem contorna limites; ele apenas abre instâncias separadas do app oficial.
 
+## Barra de tarefas: um botão por conta
+Cada janela de conta recebe uma identidade própria (`ClaudeHub.<conta>`), então o Windows mostra **um botão por conta** ("Claude - Trabalho", "Claude - Pessoal"…), separado do Claude principal, em vez de juntar tudo num ícone só. Você pode fixar cada botão na barra: ele reabre aquela conta pelo Hub.
+Quem mantém isso é um processo escondido (**guardião**) que sobe sozinho ao abrir uma conta, reaplica a identidade a cada 2 s (o Claude pode recriar janelas) e **sai sozinho 30 s depois que a última conta fecha**. Só existe um por pasta do Hub. O Windows não guarda esse carimbo sem o processo vivo — por isso ele existe.
+
 ## Garantias (testadas)
 - Contas com nomes parecidos (`T1` e `T10`) não se confundem: o Hub compara a pasta do perfil por inteiro.
 - Duas contas abertas ao mesmo tempo por atalhos diferentes não se atropelam na hora de copiar o motor (uma atualização por vez).
 - Se a cópia do motor for interrompida (queda de energia, janela fechada), a próxima abertura refaz a cópia sozinha.
 - Um `contas.json` corrompido não é sobrescrito: o Hub guarda uma cópia (`contas.json.corrompido-…`) e explica o erro.
 - Com o motor em uso, a atualização é recusada com o nome da conta a fechar — nunca copia por cima de arquivos em uso.
+- Verificado na barra de tarefas real: três janelas do Claude viram três botões (antes: um grupo de duas + um); o guardião nunca duplica e encerra sozinho.
 
 ## Limitações
 - Só Claude Desktop instalado pela **Microsoft Store** (é de onde o Hub copia o motor).
-- As janelas das contas podem ficar agrupadas num único ícone da barra de tarefas.
 - Fechar uma conta pelo Hub fecha também o que ela deixou rodando (por exemplo sessões do Claude Code daquele perfil).
+- O nome "Claude - Conta" e a reabertura pelo botão fixado dependem de o caminho da pasta do Hub ser curto (o Windows limita o comando de reabertura a 260 caracteres); com caminho muito longo, o agrupamento por conta continua, mas o botão mantém o nome "Claude".
 
 ## Problemas comuns
 - **A janela abre e fecha na hora** → o motor está desatualizado ou foi criado de uma pasta protegida. Feche todas as contas e use **Atualizar motor**.
